@@ -2,22 +2,26 @@
 
 Replace this template with your own entries. Add one entry per significant use of an AI tool.
 
-## 1. <short title of what you used it for>
 
-**What I asked:**
+## 1. <State Variable above subscriptions>
 
-**What I kept vs. rewrote, and why:**
+**What I asked:** Why odometry_node has no attribute called self.last_tick_count and pasted code
 
-**What the AI got wrong that I had to catch:**
+**What I kept vs. rewrote, and why:** Kept the general idea that I had to move the variables above and copy and pasted
 
-**How I verified it ran correctly (not just that it compiled):**
+**What the AI got wrong that I had to catch:** Nothing
 
-## 2. <next use>
+**How I verified it ran correctly (not just that it compiled):** It compiled and didn't give the same error as previously given
 
-**What I asked:**
+## 2. <MatPlotLib Installation>
 
-**What I kept vs. rewrote, and why:**
+**What I asked:** Took a screenshot of a warning and asked if it had anything to do with Matplotlib not working. Then asked why I am not seeing a visualization
 
-**What the AI got wrong that I had to catch:**
+**What I kept vs. rewrote, and why:** instead of using python sim/launch.py --visualize I was using sim/launch.py --visualize which did not include python and also the reason it did not launch
 
-**How I verified it ran correctly (not just that it compiled):**
+**What the AI got wrong that I had to catch:** Nothing
+
+**How I verified it ran correctly (not just that it compiled):** I saw a Matplotlib visualization afterward
+
+
+When searching up syntax and small bug issues on google, google ai automatically popped up and summarized the answers from the web which I did not report
