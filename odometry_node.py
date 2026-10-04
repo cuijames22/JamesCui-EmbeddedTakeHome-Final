@@ -65,6 +65,8 @@ class OdometryNode(Node):
 
     def __init__(self):
         super().__init__("odometry_node")
+
+        #Variables first since I got error if they were after
         self.x: float = 0.0                  # fused position, metres (east)
         self.y: float = 0.0                  # fused position, metres (north)
         self.heading: float = 0.0            # radians. The rover starts facing EAST (0 rad);
@@ -83,14 +85,13 @@ class OdometryNode(Node):
         self.start_time: float = time.monotonic()
 # ------------------------------------------------------------------
         # Subscribers
-        # ------------------------------------------------------------------
-        # TODO: Create a subscriber for /wheel_ticks.
-        #
-        qos = QoSProfile(
-            reliability=ReliabilityPolicy.BEST_EFFORT,
-            depth=10,
-        )
+
+        #qos that I am using for wheelticks and odometry
+        qos = QoSProfile(reliability=ReliabilityPolicy.BEST_EFFORT, depth=10)
+
         self.tick_sub = self.create_subscription(WheelTicks, "/wheel_ticks", self.wheel_tick_callback, qos)
+        self.odom_pub = self.create_publisher(Odometry, "/odom", qos)
+        self.monitor_timer = self.create_timer(1.0, self.monitoring_callback)
 
         # IMPORTANT: Check what QoS the encoder publisher uses (see
         # sim/encoder_publisher.py). A mismatch means you will receive
@@ -137,7 +138,6 @@ class OdometryNode(Node):
         """
         Called each time a wheel tick message arrives (~50 Hz).
 
-
         Convert the change in tick count to a distance, then update your
         position estimate and publish odometry.
 
@@ -169,14 +169,45 @@ class OdometryNode(Node):
         """
         # TODO: implement
 
-        #Just checking if I am actually getting around 50 Hz
+        #Just checking if I am actually getting around 50 Hz (Test)
+        """
         self.wheel_msg_count += 1
         hz = self.wheel_msg_count/ (time.monotonic() - self.start_time)
         print("Wheel tick rate:", hz, "Hz")
+        """
 
-        #
+        #If there hasn't been a measurement left set it to first
+        if self.last_tick_count is None or self.last_tick_time is None:
+            self.last_tick_count = msg.tick_count
+            self.last_tick_time = msg.timestamp
+            return
+
+        #Find delta variables and set current tick/time to last tick/time
+        self.delta_tick_count = msg.tick_count - self.last_tick_count
+        self.delta_tick_time = msg.timestamp - self.last_tick_time
+        self.last_tick_count = msg.tick_count
+        self.last_tick_time = msg.timestamp
+
+        #If is the same rating then don't do anything more
+        if self.delta_tick_count == 0 or self.delta_tick_time == 0:
+            return
+
+        #Find the encoder velocity and distance
+        velocity = self.delta_tick_count / self.delta_tick_time
+        distance = self.delta_tick_count * DIST_PER_TICK
+        self.x+=distance
+        self.y+=distance
+
+        #Make the message to publish
+        msgs = Odometry()
+        msgs.header.frame_id = "odom"
+        msgs.child_frame_id = "base_link"
+        msgs.pose.pose.position.x = self.x
+        msgs.pose.pose.position.y = 0.0
+        self.odom_pub.publish(msgs)
+#
         # Suggested approach:
-        #   1. Handle first message (initialise last_tick_count / last_tick_time).
+        #   1. Handle first message (initialize last_tick_count / last_tick_time).
         #   2. Compute delta_ticks = msg.tick_count - self.last_tick_count
         #   3. Guard against duplicate (delta_ticks == 0 and delta_time ≈ 0).
         #   4. Convert ticks to distance: distance = delta_ticks * DIST_PER_TICK
