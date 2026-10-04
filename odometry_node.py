@@ -69,26 +69,36 @@ class OdometryNode(Node):
         #Variables first since I got error if they were after
         self.x: float = 0.0                  # fused position, metres (east)
         self.y: float = 0.0                  # fused position, metres (north)
-        self.heading: float = 0.0            # radians. The rover starts facing EAST (0 rad);
-        # x is east, y is north, counter-clockwise is positive
+        self.heading: float = 0.0            # radians counterclockwise starting EAST
+        self.angularSpeed : float = 0.0      # angular speed
+        self.velocity : float =0.0           # linear speed (no direction)
+        self.distance : float= 0.0           # distance traveled for wheel ticks
 
+        #All the last variables
         self.last_tick_count: int | None = None
         self.last_tick_time: float | None = None
-
-        self.delta_tick_count : int | None = None
-        self.delta_tick_time : float | None = None
-
         self.last_gps_time: float | None = None
+        self.last_gps_x : float | None = None
+        self.last_gps_y : float | None = None
+        self.last_gps_heading: float = 0.0
         self.last_wheel_time: float | None = None
 
-        self.wheel_msg_count: int = 0
-        self.start_time: float = time.monotonic()
+        #All the delta variables
+        self.delta_tick_count : int | None = None
+        self.delta_tick_time : float | None = None
+        self.delta_gps_time : float = 1.0
+        self.delta_gps_heading : float = 0.0
+
+        self.w_gps : float = 1.0                    #Weighting
+        self.wheel_msg_count: int = 0               #Wheel msg count
+        self.start_time: float = time.monotonic()   #Start time
 # ------------------------------------------------------------------
         # Subscribers
 
         #qos that I am using for wheelticks and odometry
         qos = QoSProfile(reliability=ReliabilityPolicy.BEST_EFFORT, depth=10)
 
+        # Subscriber, publisher and timer definitions
         self.tick_sub = self.create_subscription(WheelTicks, "/wheel_ticks", self.wheel_tick_callback, qos)
         self.gps_sub = self.create_subscription(GPSEstimate, "/gps_estimate", self.gps_callback, qos)
         self.odom_pub = self.create_publisher(Odometry, "/odom", qos)
@@ -105,8 +115,6 @@ class OdometryNode(Node):
         # self.tick_sub = self.create_subscription(
         #     WheelTicks, "/wheel_ticks", self.wheel_tick_callback, ???
         # )
-
-        # TODO: Create a subscriber for /gps_estimate (same QoS considerations).
         #
         # self.gps_sub = self.create_subscription(GPSEstimate, "/gps_estimate", self.gps_callback, qos)
         # # self.gps_sub = self.create_subscription(
@@ -116,25 +124,18 @@ class OdometryNode(Node):
         # ------------------------------------------------------------------
         # Publisher
         # ------------------------------------------------------------------
-        # TODO: Create a publisher for /odom.
         #
         # self.odom_pub = self.create_publisher(Odometry, "/odom", qos)
         # # ------------------------------------------------------------------
         # # Timer — 1 Hz monitoring output
         # # ------------------------------------------------------------------
-        # # TODO: Create a timer that calls self.monitoring_callback once per second.
         # #
         # self.monitor_timer = self.create_timer(1.0, self.monitoring_callback)
-
-        # ------------------------------------------------------------------
-        # State  — add whatever you need
-        # ------------------------------------------------------------------
         # use time.monotonic() to measure durations
 
     # -----------------------------------------------------------------------
     # Wheel encoder callback
     # -----------------------------------------------------------------------
-
     def wheel_tick_callback(self, msg: WheelTicks) -> None:
         """
         Called each time a wheel tick message arrives (~50 Hz).
@@ -177,7 +178,7 @@ class OdometryNode(Node):
         print("Wheel tick rate:", hz, "Hz")
         """
 
-        #If there hasn't been a measurement left set it to first
+        #If there hasn't been a measurement yet set it to first
         if self.last_tick_count is None or self.last_tick_time is None:
             self.last_tick_count = msg.tick_count
             self.last_tick_time = msg.timestamp
@@ -198,18 +199,13 @@ class OdometryNode(Node):
             return
 
         #Find the encoder velocity and distance
-        velocity = self.delta_tick_count / self.delta_tick_time
-        distance = self.delta_tick_count * DIST_PER_TICK
-        self.x+=distance
-        self.y+=distance
+        self.velocity = self.delta_tick_count / self.delta_tick_time
+        self.distance = self.delta_tick_count * DIST_PER_TICK
+        self.x+=self.distance*(math.sin(self.heading))
+        self.y+=self.distance*(math.cos(self.heading))
 
         #Make the message to publish
-        msgs = Odometry()
-        msgs.header.frame_id = "odom"
-        msgs.child_frame_id = "base_link"
-        msgs.pose.pose.position.x = self.x
-        msgs.pose.pose.position.y = 0.0
-        self.odom_pub.publish(msgs)
+        self.publish_odometry()
 #
         # Suggested approach:
         #   1. Handle first message (initialize last_tick_count / last_tick_time).
@@ -248,8 +244,27 @@ class OdometryNode(Node):
             How do you weight them? Should the weighting change over time?
             (That's Stretch Goal B — but even a fixed weighting is fine here.)
         """
-        # TODO: implement
-        #
+
+        #If there hasn't been a measurement yey set it to first
+        if self.last_gps_time is None:
+            self.last_gps_time = msg.timestamp
+            self.last_gps_x = msg.x
+            self.last_gps_y = msg.y
+            return
+
+        #Find delta variables and set current tick/time to last tick/time
+        self.w_gps = 1-msg.covariance
+        self.heading = math.atan2(msg.y-self.last_gps_y, msg.x - self.last_gps_x)
+
+        #Calculate Deltas for GPS
+        self.delta_gps_time = msg.timestamp - self.last_gps_time
+        self.delta_gps_heading = self.heading - self.last_gps_heading
+
+        # Weighting position based off w_gpa, previous calculated pos and gps pos
+        self.x = (1 - self.w_gps) * self.x + self.w_gps * msg.x
+        self.y = (1 - self.w_gps) * self.y + self.w_gps * msg.y
+        self.last_gps_time = msg.timestamp
+
         # Suggested approach:
         #   1. Compute a weight w_gps based on msg.covariance (lower cov = higher trust).
         #   2. Blend: self.x = (1 - w_gps) * self.x + w_gps * msg.x
@@ -282,7 +297,20 @@ class OdometryNode(Node):
         Look up the real nav_msgs/Odometry definition for the full field list.
         Not every field is required — position is the minimum.
         """
-        # TODO: implement
+
+        # Create the msg that will be used by ROS
+        msgs = Odometry()
+        msgs.header.frame_id = "odom"
+        msgs.child_frame_id = "base_link"
+        msgs.pose.pose.position.x = self.x
+        msgs.pose.pose.position.y = self.y
+        msgs.pose.pose.orientation.x = 0.0
+        msgs.pose.pose.orientation.y = 0.0
+        msgs.pose.pose.orientation.w = math.cos(self.heading / 2)
+        msgs.pose.pose.orientation.z = math.sin(self.heading / 2)
+        msgs.twist.twist.linear.x = self.velocity
+        msgs.twist.twist.angular.z = self.delta_gps_heading / self.delta_gps_time
+        self.odom_pub.publish(msgs)
         pass
 
     # -----------------------------------------------------------------------
