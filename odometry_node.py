@@ -65,12 +65,33 @@ class OdometryNode(Node):
 
     def __init__(self):
         super().__init__("odometry_node")
+        self.x: float = 0.0                  # fused position, metres (east)
+        self.y: float = 0.0                  # fused position, metres (north)
+        self.heading: float = 0.0            # radians. The rover starts facing EAST (0 rad);
+        # x is east, y is north, counter-clockwise is positive
 
-        # ------------------------------------------------------------------
+        self.last_tick_count: int | None = None
+        self.last_tick_time: float | None = None
+
+        self.delta_tick_count : int | None = None
+        self.delta_tick_time : float | None = None
+
+        self.last_gps_time: float | None = None
+        self.last_wheel_time: float | None = None
+
+        self.wheel_msg_count: int = 0
+        self.start_time: float = time.monotonic()
+# ------------------------------------------------------------------
         # Subscribers
         # ------------------------------------------------------------------
         # TODO: Create a subscriber for /wheel_ticks.
         #
+        qos = QoSProfile(
+            reliability=ReliabilityPolicy.BEST_EFFORT,
+            depth=10,
+        )
+        self.tick_sub = self.create_subscription(WheelTicks, "/wheel_ticks", self.wheel_tick_callback, qos)
+
         # IMPORTANT: Check what QoS the encoder publisher uses (see
         # sim/encoder_publisher.py). A mismatch means you will receive
         # zero messages — with no error or warning, just silence.
@@ -85,7 +106,8 @@ class OdometryNode(Node):
 
         # TODO: Create a subscriber for /gps_estimate (same QoS considerations).
         #
-        # self.gps_sub = self.create_subscription(
+        # self.gps_sub = self.create_subscription(GPSEstimate, "/gps_estimate", self.gps_callback, qos)
+        # # self.gps_sub = self.create_subscription(
         #     GPSEstimate, "/gps_estimate", self.gps_callback, ???
         # )
 
@@ -94,31 +116,18 @@ class OdometryNode(Node):
         # ------------------------------------------------------------------
         # TODO: Create a publisher for /odom.
         #
-        # self.odom_pub = self.create_publisher(Odometry, "/odom", 10)
-
-        # ------------------------------------------------------------------
-        # Timer — 1 Hz monitoring output
-        # ------------------------------------------------------------------
-        # TODO: Create a timer that calls self.monitoring_callback once per second.
-        #
+        # self.odom_pub = self.create_publisher(Odometry, "/odom", qos)
+        # # ------------------------------------------------------------------
+        # # Timer — 1 Hz monitoring output
+        # # ------------------------------------------------------------------
+        # # TODO: Create a timer that calls self.monitoring_callback once per second.
+        # #
         # self.monitor_timer = self.create_timer(1.0, self.monitoring_callback)
 
         # ------------------------------------------------------------------
         # State  — add whatever you need
         # ------------------------------------------------------------------
-        self.x: float = 0.0                  # fused position, metres (east)
-        self.y: float = 0.0                  # fused position, metres (north)
-        self.heading: float = 0.0            # radians. The rover starts facing EAST (0 rad);
-                                             # x is east, y is north, counter-clockwise is positive
-
-        self.last_tick_count: int | None = None
-        self.last_tick_time: float | None = None
-
-        self.last_gps_time: float | None = None
-        self.last_wheel_time: float | None = None
-
-        self.wheel_msg_count: int = 0
-        self.start_time: float = time.monotonic()   # use time.monotonic() to measure durations
+        # use time.monotonic() to measure durations
 
     # -----------------------------------------------------------------------
     # Wheel encoder callback
@@ -127,6 +136,7 @@ class OdometryNode(Node):
     def wheel_tick_callback(self, msg: WheelTicks) -> None:
         """
         Called each time a wheel tick message arrives (~50 Hz).
+
 
         Convert the change in tick count to a distance, then update your
         position estimate and publish odometry.
@@ -158,6 +168,12 @@ class OdometryNode(Node):
             DIST_PER_TICK   metres per encoder tick (~0.00131 m)
         """
         # TODO: implement
+
+        #Just checking if I am actually getting around 50 Hz
+        self.wheel_msg_count += 1
+        hz = self.wheel_msg_count/ (time.monotonic() - self.start_time)
+        print("Wheel tick rate:", hz, "Hz")
+
         #
         # Suggested approach:
         #   1. Handle first message (initialise last_tick_count / last_tick_time).
