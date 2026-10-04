@@ -90,6 +90,7 @@ class OdometryNode(Node):
         qos = QoSProfile(reliability=ReliabilityPolicy.BEST_EFFORT, depth=10)
 
         self.tick_sub = self.create_subscription(WheelTicks, "/wheel_ticks", self.wheel_tick_callback, qos)
+        self.gps_sub = self.create_subscription(GPSEstimate, "/gps_estimate", self.gps_callback, qos)
         self.odom_pub = self.create_publisher(Odometry, "/odom", qos)
         self.monitor_timer = self.create_timer(1.0, self.monitoring_callback)
 
@@ -189,6 +190,10 @@ class OdometryNode(Node):
         self.last_tick_time = msg.timestamp
 
         #If is the same rating then don't do anything more
+        #This was supposed to be step 4 but I accidentally did it in step 3
+        #Pretty much if the change in the count or the time is the same it will not output anything to the publisher
+        #I cannot detect dropped ticks because there is no difference in the tick_time or abnormality in the tick count
+        #It is purely a 1 number difference that I cannot detect since delta_tick_count varies
         if self.delta_tick_count == 0 or self.delta_tick_time == 0:
             return
 
