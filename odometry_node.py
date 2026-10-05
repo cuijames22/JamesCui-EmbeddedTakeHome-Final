@@ -43,6 +43,9 @@ from sim.messages import WheelTicks, GPSEstimate
 from nav_msgs.msg import Odometry
 from geometry_msgs.msg import Quaternion
 
+#importing numpy for poolynomial regression
+import numpy as np
+
 # --------------------------------------------------------------------------
 # Constants  (do not change — these match the real rover's encoder setup)
 # --------------------------------------------------------------------------
@@ -50,19 +53,10 @@ WHEEL_RADIUS_M = 0.075          # metres
 TICKS_PER_REVOLUTION = 360
 DIST_PER_TICK = (2.0 * math.pi * WHEEL_RADIUS_M) / TICKS_PER_REVOLUTION  # ~0.00131 m
 
-
+# Subscribes to /wheel_ticks and /gps_estimate
+# Publishes /odom
+# Fuses encoder and gps readings to determine an estimate of robot position
 class OdometryNode(Node):
-    """
-    Fuses wheel encoder ticks with GPS estimates to produce odometry.
-
-    Subscribes:
-        /wheel_ticks   (sim.messages.WheelTicks)   ~50 Hz, BEST_EFFORT
-        /gps_estimate  (sim.messages.GPSEstimate)   ~1 Hz,  BEST_EFFORT
-
-    Publishes:
-        /odom          (nav_msgs/Odometry)          matches input rate
-    """
-
     def __init__(self):
         super().__init__("odometry_node")
 
@@ -80,7 +74,7 @@ class OdometryNode(Node):
         self.last_gps_time: float | None = None
         self.last_gps_x : float | None = None
         self.last_gps_y : float | None = None
-        self.last_gps_heading: float = 0.0
+        self.last_heading: float = 0.0
         self.last_wheel_time: float | None = None
 
         #All the delta variables
@@ -89,9 +83,18 @@ class OdometryNode(Node):
         self.delta_gps_time : float = 1.0
         self.delta_gps_heading : float = 0.0
 
+        # Miscellaneous variables
         self.w_gps : float = 1.0                    #Weighting
         self.wheel_msg_count: int = 0               #Wheel msg count
+        self.gps_msg_count : int = 0                #GPS msg count
         self.start_time: float = time.monotonic()   #Start time
+
+        # Variables used for regressions
+        self.last10GPStimes : np.array = np.zeros(5)
+        self.last10GPSx : np.array = np.zeros(5)
+        self.last10GPSy : np.array = np.zeros(5)
+        self.coefficientsx : np.ndarray = [0,0]
+        self.coefficientsy : np.ndarray = [0,0]
 # ------------------------------------------------------------------
         # Subscribers
 
@@ -104,72 +107,10 @@ class OdometryNode(Node):
         self.odom_pub = self.create_publisher(Odometry, "/odom", qos)
         self.monitor_timer = self.create_timer(1.0, self.monitoring_callback)
 
-        # IMPORTANT: Check what QoS the encoder publisher uses (see
-        # sim/encoder_publisher.py). A mismatch means you will receive
-        # zero messages — with no error or warning, just silence.
-        # This is intentional and mirrors real ROS 2 behaviour.
-        #
-        # Hint: the QoS profile you need looks like:
-        #   QoSProfile(reliability=ReliabilityPolicy.???, depth=10)
-        #
-        # self.tick_sub = self.create_subscription(
-        #     WheelTicks, "/wheel_ticks", self.wheel_tick_callback, ???
-        # )
-        #
-        # self.gps_sub = self.create_subscription(GPSEstimate, "/gps_estimate", self.gps_callback, qos)
-        # # self.gps_sub = self.create_subscription(
-        #     GPSEstimate, "/gps_estimate", self.gps_callback, ???
-        # )
-
-        # ------------------------------------------------------------------
-        # Publisher
-        # ------------------------------------------------------------------
-        #
-        # self.odom_pub = self.create_publisher(Odometry, "/odom", qos)
-        # # ------------------------------------------------------------------
-        # # Timer — 1 Hz monitoring output
-        # # ------------------------------------------------------------------
-        # #
-        # self.monitor_timer = self.create_timer(1.0, self.monitoring_callback)
-        # use time.monotonic() to measure durations
-
-    # -----------------------------------------------------------------------
-    # Wheel encoder callback
-    # -----------------------------------------------------------------------
+    # Called each time a wheel tick message arrives (~50 Hz).
+    #Uses heading calculated by gps to figure out direction
+    #Checks for duplicate readings
     def wheel_tick_callback(self, msg: WheelTicks) -> None:
-        """
-        Called each time a wheel tick message arrives (~50 Hz).
-
-        Convert the change in tick count to a distance, then update your
-        position estimate and publish odometry.
-
-        Args:
-            msg.tick_count   Cumulative encoder ticks (monotonically increases).
-            msg.timestamp    Wall-clock seconds when the reading was taken.
-                             Subject to slow clock drift — see README.
-
-        Noise to handle:
-            DUPLICATE messages   The same (tick_count, timestamp) pair is
-                                 occasionally re-sent within a few ms.
-                                 If you compute velocity as delta_ticks / delta_time
-                                 and delta_time is 0, you get a NaN, an infinite
-                                 velocity, or a ZeroDivisionError. Check for this.
-
-            DROPPED ticks        Now and then the encoder misses one tick (~1.3mm)
-                                 and the cumulative counter is simply 1 lower than
-                                 it should be. The data never shows a gap, so you
-                                 cannot spot an individual drop. The error just
-                                 adds up (~6cm per minute), and GPS fusion is your
-                                 correction. (Think about why you can't see it.)
-
-            CLOCK DRIFT          msg.timestamp wanders slowly away from the real
-                                 time. Use differences between timestamps as
-                                 durations; never compare them with time.time().
-
-        Useful constants:
-            DIST_PER_TICK   metres per encoder tick (~0.00131 m)
-        """
-        # TODO: implement
 
         #Just checking if I am actually getting around 50 Hz (Test)
         """
@@ -204,103 +145,74 @@ class OdometryNode(Node):
         #Find the encoder velocity and distance
         self.velocity = self.delta_tick_count / self.delta_tick_time
         self.distance = self.delta_tick_count * DIST_PER_TICK
-        self.x+=self.distance*(math.sin(self.heading))
-        self.y+=self.distance*(math.cos(self.heading))
+        self.x+=self.distance*(math.cos(self.heading))
+        self.y+=self.distance*(math.sin(self.heading))
 
         #Make the message to publish
         self.publish_odometry()
-#
-        # Suggested approach:
-        #   1. Handle first message (initialize last_tick_count / last_tick_time).
-        #   2. Compute delta_ticks = msg.tick_count - self.last_tick_count
-        #   3. Guard against duplicate (delta_ticks == 0 and delta_time ≈ 0).
-        #   4. Convert ticks to distance: distance = delta_ticks * DIST_PER_TICK
-        #   5. Update self.x and self.y: the rover moves `distance` in the direction
-        #      it is FACING. Ticks tell you how far, not which way. Where does your
-        #      heading come from and how does it change? See "Heading is not
-        #      measured" in the README before you write this line.
-        #   6. Call self.publish_odometry().
         pass
 
-    # -----------------------------------------------------------------------
-    # GPS callback
-    # -----------------------------------------------------------------------
-
+    """
+     Called each time a GPS estimate arrives (~1 Hz, with occasional outages).
+     Calculates heading
+     Calculates a predicted position for the rover
+    """
     def gps_callback(self, msg: GPSEstimate) -> None:
-        """
-        Called each time a GPS estimate arrives (~1 Hz, with occasional outages).
 
-        Fuse the GPS absolute position with your wheel-derived position.
-        A weighted average is sufficient — no EKF required.
-
-        Args:
-            msg.x           GPS east position (metres from start).
-            msg.y           GPS north position (metres from start).
-            msg.timestamp   Seconds since epoch when the reading was taken.
-            msg.covariance  Uncertainty (m²). Higher = less reliable.
-                            Use this to adjust how much you trust the GPS
-                            reading relative to your wheel estimate.
-
-        Design question:
-            GPS is noisy but absolute (no accumulated drift).
-            Wheel odometry drifts but is precise over short distances.
-            How do you weight them? Should the weighting change over time?
-            (That's Stretch Goal B — but even a fixed weighting is fine here.)
-        """
-
-        #If there hasn't been a measurement yey set it to first
+        #If there hasn't been a measurement yey set it to first and set variables
         if self.last_gps_time is None:
             self.last_gps_time = msg.timestamp
             self.last_gps_x = msg.x
             self.last_gps_y = msg.y
+            self.last10GPSx[0] = msg.x
+            self.last10GPSy[0] = msg.y
+            self.last10GPStimes[0] = msg.timestamp
+            self.gps_msg_count += 1
+            self.last_heading = 0.0
             return
 
-        #Find delta variables and set current tick/time to last tick/time
-        self.w_gps = 1-msg.covariance
-        self.heading = math.atan2(msg.y-self.last_gps_y, msg.x - self.last_gps_x)
+        #If there isn't 5 or more total gps points yet fill up the array of points
+        if self.gps_msg_count < 5:
+            self.last10GPStimes[self.gps_msg_count] = msg.timestamp
+            self.last10GPSx[self.gps_msg_count] = msg.x
+            self.last10GPSy[self.gps_msg_count] = msg.y
+            self.coefficientsx = np.polyfit(self.last10GPStimes[0:self.gps_msg_count+1], self.last10GPSx[0:self.gps_msg_count+1], deg=1)
+            self.coefficientsy = np.polyfit(self.last10GPStimes[0:self.gps_msg_count+1], self.last10GPSy[0:self.gps_msg_count+1], deg=1)
+        # Otherwise, shift all the points down so you have the 5 most recent
+        else:
+            for i in range(4):
+                self.last10GPSx[i] = self.last10GPSx[i+1]
+                self.last10GPSy[i] = self.last10GPSy[i+1]
+                self.last10GPStimes[i] = self.last10GPStimes[i+1]
+            self.last10GPSx[4] = msg.x
+            self.last10GPSy[4] = msg.y
+            self.last10GPStimes[4] = msg.timestamp
+            # Create a regression for x and y relative to time
+            self.coefficientsx = np.polyfit(self.last10GPStimes, self.last10GPSx, deg=1)
+            self.coefficientsy = np.polyfit(self.last10GPStimes, self.last10GPSy, deg=1)
 
-        #Calculate Deltas for GPS
+        # Calculate heading using arctan with the derivatives and update other variables
+        self.heading = math.atan2(self.coefficientsy[0], self.coefficientsx[0])
+
+        # Update delta Variables
+        self.delta_gps_heading = self.heading - self.last_heading
         self.delta_gps_time = msg.timestamp - self.last_gps_time
-        self.delta_gps_heading = self.heading - self.last_gps_heading
+        self.last_heading = self.heading
+
+        # Simple weighting
+        self.w_gps = (1-msg.covariance)*0.5
 
         # Weighting position based off w_gpa, previous calculated pos and gps pos
         self.x = (1 - self.w_gps) * self.x + self.w_gps * msg.x
         self.y = (1 - self.w_gps) * self.y + self.w_gps * msg.y
         self.last_gps_time = msg.timestamp
 
-        # Suggested approach:
-        #   1. Compute a weight w_gps based on msg.covariance (lower cov = higher trust).
-        #   2. Blend: self.x = (1 - w_gps) * self.x + w_gps * msg.x
-        #             self.y = (1 - w_gps) * self.y + w_gps * msg.y
-        #   3. Update self.last_gps_time = msg.timestamp
+        # Increases count at the end
+        self.gps_msg_count +=1
         pass
 
-    # -----------------------------------------------------------------------
-    # Odometry publisher
-    # -----------------------------------------------------------------------
-
+    # This function publishes the odometry to the ROS system
     def publish_odometry(self) -> None:
-        """
-        Build a nav_msgs/Odometry message from the current state and publish it.
-
-        The Odometry message layout (real ROS 2 spec, mirrored by the shim):
-            msg.header.stamp         float, seconds since epoch
-            msg.header.frame_id      str,   "odom"
-            msg.child_frame_id       str,   "base_link"
-            msg.pose.pose.position.x float, metres east
-            msg.pose.pose.position.y float, metres north
-            msg.pose.pose.orientation  Quaternion(x, y, z, w)
-                For a 2D robot rotating around z: yaw → quaternion:
-                    z = sin(heading / 2)
-                    w = cos(heading / 2)
-                    x = 0, y = 0
-            msg.twist.twist.linear.x float, forward speed (m/s)
-            msg.twist.twist.angular.z float, yaw rate (rad/s)
-
-        Look up the real nav_msgs/Odometry definition for the full field list.
-        Not every field is required — position is the minimum.
-        """
-
         # Create the msg that will be used by ROS
         msgs = Odometry()
         msgs.header.frame_id = "odom"
@@ -316,41 +228,15 @@ class OdometryNode(Node):
         self.odom_pub.publish(msgs)
         pass
 
-    # -----------------------------------------------------------------------
-    # Monitoring callback  (1 Hz)
-    # -----------------------------------------------------------------------
-
+    # A telemetry statement for the terminal that shows data to be interpreted in testing
     def monitoring_callback(self) -> None:
-        """
-        Print a one-line status update to the terminal once per second.
-
-        Required output (see README rubric):
-            - Seconds since last /wheel_ticks message
-            - Seconds since last /gps_estimate message
-            - Measured /wheel_ticks receive rate vs expected ~50 Hz
-            - Current fused position (x, y)
-
-        Tip: record time.monotonic() each time a message ARRIVES and subtract.
-        Don't use msg.timestamp for this: the encoder's clock drifts.
-
-        Example format (feel free to change the layout):
-            [odom] pos=(1.23, 0.45)m  enc=0.02s ago @49.8Hz  gps=0.91s ago
-        """
-
-
         if (time.monotonic() - self.start_time) >= 1:
             hz = self.wheel_msg_count/(time.monotonic() - self.start_time)
             self.wheel_msg_count = 0
             self.start_time = time.monotonic()
             print (f"[odom] post=({self.x:.2f}, {self.y:.2f}m  enc = {self.delta_tick_time:.2f}"
                    f"s ago @{hz:.2f}Hz  gps= {self.delta_gps_time:.2f}s ago")
-
         pass
-
-
-# ---------------------------------------------------------------------------
-# Entry point
-# ---------------------------------------------------------------------------
 
 def main() -> None:
     rclpy.init()
