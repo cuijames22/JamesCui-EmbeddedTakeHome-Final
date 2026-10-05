@@ -43,7 +43,7 @@ from sim.messages import WheelTicks, GPSEstimate
 from nav_msgs.msg import Odometry
 from geometry_msgs.msg import Quaternion
 
-#importing numpy for poolynomial regression
+#importing NumPy for polynomial regression
 import numpy as np
 
 # --------------------------------------------------------------------------
@@ -90,15 +90,15 @@ class OdometryNode(Node):
         self.start_time: float = time.monotonic()   #Start time
 
         # Variables used for regressions
-        self.last10GPStimes : np.array = np.zeros(5)
+        self.last10GPS_Times : np.array = np.zeros(5)
         self.last10GPSx : np.array = np.zeros(5)
         self.last10GPSy : np.array = np.zeros(5)
-        self.coefficientsx : np.ndarray = [0,0]
-        self.coefficientsy : np.ndarray = [0,0]
+        self.coefficientsX : np.ndarray = [0, 0]
+        self.coefficientsY : np.ndarray = [0, 0]
 # ------------------------------------------------------------------
         # Subscribers
 
-        #qos that I am using for wheelticks and odometry
+        #qos that I am using for wheel ticks and odometry
         qos = QoSProfile(reliability=ReliabilityPolicy.BEST_EFFORT, depth=10)
 
         # Subscriber, publisher and timer definitions
@@ -135,7 +135,7 @@ class OdometryNode(Node):
         self.last_tick_time = msg.timestamp
 
         #If is the same rating then don't do anything more
-        #This was supposed to be step 4 but I accidentally did it in step 3
+        #This was supposed to be step 4, but I accidentally did it in step 3
         #Pretty much if the change in the count or the time is the same it will not output anything to the publisher
         #I cannot detect dropped ticks because there is no difference in the tick_time or abnormality in the tick count
         #It is purely a 1 number difference that I cannot detect since delta_tick_count varies
@@ -166,33 +166,33 @@ class OdometryNode(Node):
             self.last_gps_y = msg.y
             self.last10GPSx[0] = msg.x
             self.last10GPSy[0] = msg.y
-            self.last10GPStimes[0] = msg.timestamp
+            self.last10GPS_Times[0] = msg.timestamp
             self.gps_msg_count += 1
             self.last_heading = 0.0
             return
 
         #If there isn't 5 or more total gps points yet fill up the array of points
         if self.gps_msg_count < 5:
-            self.last10GPStimes[self.gps_msg_count] = msg.timestamp
+            self.last10GPS_Times[self.gps_msg_count] = msg.timestamp
             self.last10GPSx[self.gps_msg_count] = msg.x
             self.last10GPSy[self.gps_msg_count] = msg.y
-            self.coefficientsx = np.polyfit(self.last10GPStimes[0:self.gps_msg_count+1], self.last10GPSx[0:self.gps_msg_count+1], deg=1)
-            self.coefficientsy = np.polyfit(self.last10GPStimes[0:self.gps_msg_count+1], self.last10GPSy[0:self.gps_msg_count+1], deg=1)
+            self.coefficientsX = np.polyfit(self.last10GPS_Times[0:self.gps_msg_count + 1], self.last10GPSx[0:self.gps_msg_count + 1], deg=1)
+            self.coefficientsY = np.polyfit(self.last10GPS_Times[0:self.gps_msg_count + 1], self.last10GPSy[0:self.gps_msg_count + 1], deg=1)
         # Otherwise, shift all the points down so you have the 5 most recent
         else:
             for i in range(4):
                 self.last10GPSx[i] = self.last10GPSx[i+1]
                 self.last10GPSy[i] = self.last10GPSy[i+1]
-                self.last10GPStimes[i] = self.last10GPStimes[i+1]
+                self.last10GPS_Times[i] = self.last10GPS_Times[i + 1]
             self.last10GPSx[4] = msg.x
             self.last10GPSy[4] = msg.y
-            self.last10GPStimes[4] = msg.timestamp
+            self.last10GPS_Times[4] = msg.timestamp
             # Create a regression for x and y relative to time
-            self.coefficientsx = np.polyfit(self.last10GPStimes, self.last10GPSx, deg=1)
-            self.coefficientsy = np.polyfit(self.last10GPStimes, self.last10GPSy, deg=1)
+            self.coefficientsX = np.polyfit(self.last10GPS_Times, self.last10GPSx, deg=1)
+            self.coefficientsY = np.polyfit(self.last10GPS_Times, self.last10GPSy, deg=1)
 
         # Calculate heading using arctan with the derivatives and update other variables
-        self.heading = math.atan2(self.coefficientsy[0], self.coefficientsx[0])
+        self.heading = math.atan2(self.coefficientsY[0], self.coefficientsX[0])
 
         # Update delta Variables
         self.delta_gps_heading = self.heading - self.last_heading
