@@ -391,18 +391,30 @@ We don't expect a perfect implementation. Those who show genuine effort and lear
 
 ---
 
-## Your write-up
+## James Cui Write Up
 
 *Candidates: replace this section with your own short write-up. Keep it to what a teammate would need to trust your implementation.*
 
-- **Fusion approach.** How do you weight GPS vs wheel odometry? Does the weighting change over time or with signal quality?
-- **Heading.** Where does your heading (and its rate of change) come from? What did you assume about the path, and what would break your approach?
-- **Noise handling.** What did you detect, how, and what happens when you detect it? Which noise can't be detected, and how do you know it is affecting your estimate without correction?
-- **Monitoring output.** What thresholds did you choose for staleness warnings and why?
-- **Ambiguity.** What did the task leave underspecified, and what call did you make?
-- **Testing.** How did you verify it was actually working correctly, not just running? What did you check with `--visualize`?
-- **Stretch goals.** Which did you attempt, and how far did you get?
+- **Fusion approach. How do you weight GPS vs wheel odometry? Does the weighting change over time or with signal quality?**
+  I did a consistent weighing using the 0.5*(1-covariance) from the GPS. I did not change weighting over time since the drift in distance measurements was not large enough in my opinion to change the strength of trust I should take in it over the GPS. 
 
+- **Heading. Where does your heading (and its rate of change) come from? What did you assume about the path, and what would break your approach?**
+My heading comes from the linear regression of the last 5 data points from the GPS. I take the derivative of x in respect to time and the derivative of y in respect to time. Then I arctan the y derivation divided by the x derivative. I assumed by path would change and not deviate heavily from a linear line (as in not completely go the other direction). What breaks my approach is if I do not get consistent GPS ratings which cause my linear regression line to veer off track and not follow the trajectory. 
+
+- **Noise handling. What did you detect, how, and what happens when you detect it?** Which noise can't be detected, and how do you know it is affecting your estimate without correction?
+For Noise that caused duplicate values, I simply checked if the change in tick count or time as 0. If it was then I quit the function. The noise with dropped values cannot be detected since it looks like normal readings without any differentiations. You can see there is dropped values when there is a drift in the readings along the simulation. 
+
+- **Monitoring output. What thresholds did you choose for staleness warnings and why?**
+I used the basic data such as position or change in time to make sure that nothing went wrong with the basics of the program. 
+
+- **Ambiguity. What did the task leave underspecified, and what call did you make?**
+I decided to not use polynomial regression or higher level regressions since unless they were heavily tuned, they would provide a less accurate estimation than linear regression. I know this since I attempted to do a 2nd degree polynomial regression and it gave higher error than the linear one. 
+
+- **Testing. How did you verify it was actually working correctly, not just running? What did you check with `--visualize`?**
+I ran the simulation many many times especially with the visualization. That allowed for the best visual representation of issues that I would need to fix. It was hard to find issues normally with just the terminal window. Additionally, I used extra print statements to show data such as the arrays I used for regressions. 
+
+- **Stretch goals. Which did you attempt, and how far did you get?**
+I attempted the changing weighing for a while but then realized the benefit from the changing values wouldn't help very much since the GPS will change how accurate it is during the code. This meant that if I were to trust or detrust the encoders, it would bear almost no change since the GPS would change randomly. Additionally, the encoder drift in distance was miniscule in comparison to the GPS. I did add regression for the heading calculations. 
 ---
 
 ## Submitting
