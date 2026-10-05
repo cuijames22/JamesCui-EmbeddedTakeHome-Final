@@ -178,6 +178,9 @@ class OdometryNode(Node):
         print("Wheel tick rate:", hz, "Hz")
         """
 
+        # Recording count of wheels msgs
+        self.wheel_msg_count += 1
+
         #If there hasn't been a measurement yet set it to first
         if self.last_tick_count is None or self.last_tick_time is None:
             self.last_tick_count = msg.tick_count
@@ -333,7 +336,15 @@ class OdometryNode(Node):
         Example format (feel free to change the layout):
             [odom] pos=(1.23, 0.45)m  enc=0.02s ago @49.8Hz  gps=0.91s ago
         """
-        # TODO: implement
+
+
+        if (time.monotonic() - self.start_time) >= 1:
+            hz = self.wheel_msg_count/(time.monotonic() - self.start_time)
+            self.wheel_msg_count = 0
+            self.start_time = time.monotonic()
+            print (f"[odom] post=({self.x:.2f}, {self.y:.2f}m  enc = {self.delta_tick_time:.2f}"
+                   f"s ago @{hz:.2f}Hz  gps= {self.delta_gps_time:.2f}s ago")
+
         pass
 
 
